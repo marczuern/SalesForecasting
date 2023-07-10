@@ -1,0 +1,321 @@
+---
+title: "Sales Analysis"
+author: "Marc Zürn"
+date: "2023-07-09"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(forecast)
+library(DT)
+
+
+# historical records from multiple stores
+fsales <- "./sales_weekly.csv"
+sales <- read_csv(fsales)
+sales
+
+# latest (current) week
+nweek_now <- max(sales$Week)
+
+# calculate the range of stores
+store_max <- max(sales$Store)
+store_min <- min(sales$Store)
+
+# find all possible weeks
+week_max <- max(sales$Week)
+week_min <- min(sales$Week)
+
+# add year, month and quarter to the sales table
+sales$Year <- floor ((sales$Week) / 52) + 1
+sales$Month <- floor((sales$Week - (sales$Year - 1) * 52) / (52 / 12)) + 1
+sales$Quarter <- ceiling(sales$Month / 3)
+
+
+# find max year
+year_max <- max(sales$Year)
+
+# find the max month of the current year
+max_month_currYear <- max((sales %>%
+                             filter(Year == year_max))$Month)
+
+```
+
+## Analysis 1
+Task: Provide a current week performance indicator in the UI showing current week's actual sales vs. forecast for the current week computed at the end of the last week.
+
+Explanation: The task is forecasting the sales for the most recent week, drawing upon historical data as a basis for the prediction. By the assignment, the model makes its prediction using all available past data except the last week to predict the most current week. If you wish to enhance the analysis, you can adjust the slider to include more weeks in the prediction window. This would allow you to compare the model's predictions against the actual values for a greater number of weeks, providing a more comprehensive evaluation of the prediction model's performance. 
+
+```{r, echo=FALSE}
+
+# Input Panels for Analysis 1
+inputPanel(
+  selectInput(
+    "vis_1_store",
+    label = "Select Store:",
+    choices = seq.int(store_min, store_max),
+    selected = 1
+  ),
+  
+  sliderInput(
+    "vis_1_slider",
+    label = "How many Weeks do you want to predict?",
+    min = 1,
+    max = week_max / 2,
+    value = 1
+  )
+)
+
+# Split the page to have the table next to the chart
+fluidPage(fluidRow(column(5,
+                          renderTable({
+                            # get historical data
+                            vis_1_sales_hist <- sales  %>%
+                              filter(Store == input$vis_1_store) %>%
+                              filter(Week <= nweek_now - input$vis_1_slider)
+                            
+                            # get data of the most current week or how selected by the slider
+                            vis_1_sales_last <- sales  %>%
+                              filter(Store == input$vis_1_store) %>%
+                              filter(Week > nweek_now - input$vis_1_slider)
+                            
+                            # 52 periods
+                            sales_hist_ts <-
+                              ts(vis_1_sales_hist$Weekly_Sales, frequency = 52)
+                            # autoplot(sales_hist_ts)
+                            
+                            # ARIMA: Auto-Regressive Integrated Moving Average
+                            arima_model <-
+                              auto.arima(sales_hist_ts, seasonal.test = "seas")
+                            
+                            # forecast horizon to match most recent quarter
+                            arima_pred <-
+                              forecast(arima_model, h = input$vis_1_slider)
+                            
+                            # forat the prediction dataframe
+                            sales_pred_eval <-
+                              data.frame(
+                                Week = vis_1_sales_last$Week,
+                                Prediction = as.numeric(arima_pred$mean),
+                                Actual = vis_1_sales_last$Weekly_Sales,
+                                Difference = abs(
+                                  vis_1_sales_last$Weekly_Sales - as.numeric(arima_pred$mean)
+                                )
+                              )
+                            
+                            # print table
+                            sales_pred_eval
+                            
+                            
+                          })),
+                   
+                   # Visualization
+                   column(7,
+                          renderPlot({
+                            # get historical data
+                            vis_1_sales_hist <- sales  %>%
+                              filter(Store == input$vis_1_store) %>%
+                              filter(Week <= nweek_now - input$vis_1_slider)
+                            
+                            # get data of the most current week or how selected by the slider
+                            vis_1_sales_last <- sales  %>%
+                              filter(Store == input$vis_1_store) %>%
+                              filter(Week > nweek_now - input$vis_1_slider)
+                            
+                            # 52 periods
+                            sales_hist_ts <-
+                              ts(vis_1_sales_hist$Weekly_Sales, frequency = 52)
+                            # autoplot(sales_hist_ts)
+                            
+                            # ARIMA: Auto-Regressive Integrated Moving Average
+                            arima_model <-
+                              auto.arima(sales_hist_ts, seasonal.test = "seas")
+                            
+                            # forecast horizon to match most recent quarter
+                            arima_pred <-
+                              forecast(arima_model, h = input$vis_1_slider)
+                            
+                            # forat the prediction dataframe
+                            sales_pred_eval <-
+                              data.frame(
+                                Week = vis_1_sales_last$Week,
+                                Prediction = as.numeric(arima_pred$mean),
+                                Actual = vis_1_sales_last$Weekly_Sales,
+                                Difference = abs(
+                                  vis_1_sales_last$Weekly_Sales - as.numeric(arima_pred$mean)
+                                )
+                              )
+                            
+                            # Plot the Prediction and Actual Data
+                            ggplot(sales_pred_eval) +
+                              geom_line(aes(x = Week, y = Prediction, color = "Prediction")) +
+                              geom_line(aes(x = Week, y = Actual, color = "Actual")) +
+                              xlab('Dates') +
+                              ylab('Sales') +
+                              scale_color_manual(values = c("Prediction" = "blue", "Actual" = "red")) +
+                              labs(color = '') +
+                              theme_bw()
+                            
+                          }))))
+```
+
+## Analysis 2
+Task: Generate sales forecast for a specific future quarter (during the upcoming year) selected in the UI
+
+This analysis allows to forecast the future quarters based on the historic data of the last years. As previously, this can be done indivudually for each store.
+
+```{r, echo=FALSE}
+# Input Panels for Analysis 2
+inputPanel(
+  selectInput(
+    "vis_2_store",
+    label = "Select Store: ",
+    choices = seq.int(store_min, store_max),
+    selected = 1
+  ),
+  
+  selectInput(
+    "vis_2_quarter",
+    label = "Select Quarter: ",
+    choices = c(
+      "Q1: Jan-Mar" = 1,
+      "Q2: Apr-Jun" = 2,
+      "Q3: Jul-Sep" = 3,
+      "Q4: Oct-Dec" = 4
+    ),
+    selected = 1
+  )
+)
+
+
+renderPlot({
+  # Calculate the monthly sums and filter the store to analyze the quarters
+  vis_2_sales <- sales %>%
+    filter(Store == input$vis_2_store) %>%
+    group_by(Year, Quarter, Month) %>%
+    summarize(Monthly_Sales = sum(Weekly_Sales))
+  
+  sales_hist_ts <- ts(vis_2_sales$Monthly_Sales, frequency = 12)
+  
+  # ARIMA: Auto-Regressive Integrated Moving Average
+  arima_model <- auto.arima(sales_hist_ts, seasonal.test = "seas")
+  
+  # forecast horizon
+  arima_pred <- forecast(arima_model, h = 12)
+  
+  # format the dataframe
+  sales_pred_eval <-
+    data.frame(Prediction = as.numeric(arima_pred$mean),
+               Month = seq.int(1, 12))
+  
+  # add quarters to the months
+  sales_pred_eval$Quarter <- ceiling(sales_pred_eval$Month / 3)
+  
+  # filter, to show only the selected quarter
+  sales_pred_eval <- sales_pred_eval %>%
+    filter(Quarter == input$vis_2_quarter)
+  
+  # add adaptive labels
+  quarter_text <- paste("Q", input$vis_2_quarter)
+  
+  # plot chart
+  ggplot() +
+    geom_line(data = sales_pred_eval,
+              aes(x = Month, y = Prediction, color = quarter_text)) +
+    xlab('Months') +
+    ylab('Forecast Sales') +
+    labs(color = '') +
+    theme_bw()
+})
+```
+
+## Analysis 3
+Task: Incorporate a UI functionality to compare monthly sales between the past year (actual) and the upcoming year (forecast).
+
+Again, the first selector lets you choose which store you want to analyze. The second slider lets you select range of months to analyze. As the actual year data only supports till september, the analysis of the upcoming year is also only till september. After a updated dataimport, the code automatically extends the analysis to the most recent month as well as the forecast.
+
+```{r, echo=FALSE}
+# Input Panels for Analysis 3
+inputPanel(
+  selectInput(
+    "vis_3_store",
+    label = "Select Store: ",
+    choices = seq.int(store_min, store_max),
+    selected = 1
+  ),
+  
+  sliderInput(
+    inputId = "vis_3_slider",
+    label = "Select Month Range: ",
+    min = 1,
+    max = max_month_currYear,
+    value = c(1, max_month_currYear)
+  )
+  
+)
+
+
+renderPlot({
+  # filter store
+  vis_3_sales <- sales %>%
+    filter(Store == input$vis_3_store)
+  
+  sales_hist_ts <- ts(vis_3_sales$Weekly_Sales, frequency = 52)
+  
+  # ARIMA: Auto-Regressive Integrated Moving Average
+  arima_model <- auto.arima(sales_hist_ts, seasonal.test = "seas")
+  
+  # forecast horizon
+  arima_pred <- forecast(arima_model, h = 52)
+  
+  # format dataframe and add week numbers
+  sales_pred_eval <-
+    data.frame(Prediction = as.numeric(arima_pred$mean),
+               Week = seq.int(max(vis_3_sales$Week) + 1, max(vis_3_sales$Week) +
+                                52))
+  
+  # add Year and Month to dataframe
+  sales_pred_eval$Year <- floor ((sales_pred_eval$Week) / 52) + 1
+  sales_pred_eval$Month <-
+    floor((sales_pred_eval$Week - (sales_pred_eval$Year - 1) * 52) / (52 /
+                                                                        12)) + 1
+  # filter months selected by slider
+  sales_pred_eval <- sales_pred_eval %>%
+    filter(Month >= input$vis_3_slider[1]) %>%
+    filter(Month <= input$vis_3_slider[2])
+  
+  # add week since starting of the year to df, to compare with forecast
+  sales_pred_eval$year_week <-
+    sales_pred_eval$Week - (sales_pred_eval$Year - 1) * 52
+  
+  # filter months selected by slider
+  hist_sales <- vis_3_sales %>%
+    filter(Year == year_max) %>%
+    filter(Month >= input$vis_3_slider[1]) %>%
+    filter(Month <= input$vis_3_slider[2])
+  
+  # add week since starting of the year to df, to compare with forecast
+  hist_sales$year_week <-
+    hist_sales$Week - (hist_sales$Year - 1) * 52
+  
+  # plot forecast and the current year based on filters
+  ggplot() +
+    geom_line(data = sales_pred_eval,
+              aes(x = year_week, y = Prediction, color = "Forecast Next Year")) +
+    geom_line(data = hist_sales,
+              aes(x = year_week, y = Weekly_Sales, color = "Current Year")) +
+    xlab('Weeks') +
+    ylab('Sales') +
+    scale_color_manual(values = c(
+      "Current Year" = "blue",
+      "Forecast Next Year" = "red"
+    )) +
+    labs(color = '') +
+    theme_bw()
+})
+```
+
